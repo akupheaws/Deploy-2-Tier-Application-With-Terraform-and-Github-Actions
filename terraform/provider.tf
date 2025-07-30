@@ -8,9 +8,9 @@ provider "aws" {
 }
 terraform {
   backend "s3" {
-    bucket         = "<your-s3-bucket>"
-    key            = "terraform/state"
-    region         = "us-east-2"
-    dynamodb_table = "<your-dynamodb-table>" # Optional for state locking
+    bucket         = "deploy-2-tier-app-with-terraform"
+    key            = "state"
+    region         = "us-east-1"
+    dynamodb_table = "state-locking" # Optional for state locking
   }
 }
