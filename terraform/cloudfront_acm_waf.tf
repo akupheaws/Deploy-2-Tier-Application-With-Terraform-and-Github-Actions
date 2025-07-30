@@ -1,16 +1,26 @@
-resource "aws_acm_certificate" "cert" {
+resource "aws_acm_certificate" "cert_cloudfront" {
   provider                  = aws.us-east-1
   domain_name               = var.domain_name
   subject_alternative_names = ["www.${var.domain_name}"]
   validation_method         = "DNS"
   tags = {
-    Name = "SmartTodoWebApp-Cert"
+    Name = "SmartTodoWebApp-CloudFront-Cert"
   }
 }
 
-resource "aws_route53_record" "cert_validation" {
+resource "aws_acm_certificate" "cert_alb" {
+  provider                  = aws
+  domain_name               = var.domain_name
+  subject_alternative_names = ["www.${var.domain_name}"]
+  validation_method         = "DNS"
+  tags = {
+    Name = "SmartTodoWebApp-ALB-Cert"
+  }
+}
+
+resource "aws_route53_record" "cert_validation_cloudfront" {
   for_each = {
-    for dvo in aws_acm_certificate.cert.domain_validation_options : dvo.domain_name => {
+    for dvo in aws_acm_certificate.cert_cloudfront.domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
@@ -23,10 +33,31 @@ resource "aws_route53_record" "cert_validation" {
   ttl     = 60
 }
 
-resource "aws_acm_certificate_validation" "cert" {
+resource "aws_route53_record" "cert_validation_alb" {
+  for_each = {
+    for dvo in aws_acm_certificate.cert_alb.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+  zone_id = var.route53_zone_id
+  name    = each.value.name
+  type    = each.value.type
+  records = [each.value.record]
+  ttl     = 60
+}
+
+resource "aws_acm_certificate_validation" "cert_cloudfront" {
   provider                = aws.us-east-1
-  certificate_arn         = aws_acm_certificate.cert.arn
-  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
+  certificate_arn         = aws_acm_certificate.cert_cloudfront.arn
+  validation_record_fqdns = [for record in aws_route53_record.cert_validation_cloudfront : record.fqdn]
+}
+
+resource "aws_acm_certificate_validation" "cert_alb" {
+  provider                = aws
+  certificate_arn         = aws_acm_certificate.cert_alb.arn
+  validation_record_fqdns = [for record in aws_route53_record.cert_validation_alb : record.fqdn]
 }
 
 resource "aws_cloudfront_distribution" "cdn" {
@@ -64,7 +95,7 @@ resource "aws_cloudfront_distribution" "cdn" {
   }
 
   viewer_certificate {
-    acm_certificate_arn = aws_acm_certificate.cert.arn
+    acm_certificate_arn = aws_acm_certificate.cert_cloudfront.arn
     ssl_support_method  = "sni-only"
   }
 
