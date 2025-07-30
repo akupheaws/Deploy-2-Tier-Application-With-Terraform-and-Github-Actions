@@ -1,0 +1,233 @@
+name: Deploy Two-Tier Web App to AWS
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-2
+  TF_VERSION: 1.5.0
+  REPO_NAME: Deploy-2-Tier-Application-With-Terraform-and-Github-Actions
+
+jobs:
+  terraform-validate-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -out=tfplan
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/tfplan
+          retention-days: 1
+
+  terraform-apply:
+    needs: terraform-validate-plan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve tfplan
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
+
+      - name: Get Outputs
+        id: tf-outputs
+        working-directory: terraform
+        run: |
+          echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
+          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
+          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip)" >> $GITHUB_OUTPUT
+          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip)" >> $GITHUB_OUTPUT
+          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain)" >> $GITHUB_OUTPUT
+
+  deploy-application:
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH Key
+        run: |
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > bastion-host-key.pem
+          chmod 600 bastion-host-key.pem
+
+      - name: Install MySQL Client on Runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+
+      - name: Configure Database Schema via Bastion Host
+        run: |
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
+            sudo wget https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm
+            sudo dnf install mysql80-community-release-el9-1.noarch.rpm -y
+            sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
+            sudo dnf install mysql-community-client -y
+            mysql -h ${{ needs.terraform-apply.outputs.rds_endpoint }} -P 3306 -u ${{ secrets.DB_USERNAME }} -p${{ secrets.DB_PASSWORD }} << 'MYSQL'
+              CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
+              USE SmartTodoWebAppDB;
+              CREATE TABLE IF NOT EXISTS Tasks (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                task_name VARCHAR(255) NOT NULL,
+                task_description TEXT,
+                due_date DATE NULL,
+                completed BOOLEAN DEFAULT FALSE
+              );
+            MYSQL
+          EOF
+
+      - name: Deploy Application to EC2 Instance 1
+        run: |
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.web_server_1_public_ip }} << 'EOF'
+            sudo yum update -y
+            sudo yum install -y git
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+            sudo yum install -y nodejs
+            git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
+            cd ${{ env.REPO_NAME }}
+            echo "DB_HOST=${{ needs.terraform-apply.outputs.rds_endpoint }}" > .env
+            echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+            echo "DB_NAME=SmartTodoWebAppDB" >> .env
+            echo "PORT=3306" >> .env
+            echo "API_BASE_URL=http://${{ needs.terraform-apply.outputs.web_server_1_public_ip }}" >> .env
+            npm install
+            sudo npm install -g pm2
+            pm2 start index.js
+            pm2 startup
+            pm2 save
+            sudo yum install -y nginx
+            sudo systemctl start nginx
+            sudo systemctl enable nginx
+            sudo rm /etc/nginx/nginx.conf
+            sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
+            events {
+                worker_connections 1024;
+            }
+            http {
+                server {
+                    listen 80;
+                    server_name _;
+                    location / {
+                        proxy_pass http://localhost:3000;
+                        proxy_http_version 1.1;
+                        proxy_set_header Upgrade \$http_upgrade;
+                        proxy_set_header Connection "upgrade";
+                        proxy_set_header Host \$host;
+                        proxy_cache_bypass \$http_upgrade;
+                    }
+                    location /static/ {
+                        root /home/ec2-user/${{ env.REPO_NAME }}/public;
+                    }
+                }
+            }
+            EOT'
+            sudo systemctl restart nginx
+          EOF
+
+      - name: Deploy Application to EC2 Instance 2
+        run: |
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.web_server_2_public_ip }} << 'EOF'
+            sudo yum update -y
+            sudo yum install -y git
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+            sudo yum install -y nodejs
+            git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
+            cd ${{ env.REPO_NAME }}
+            echo "DB_HOST=${{ needs.terraform-apply.outputs.rds_endpoint }}" > .env
+            echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+            echo "DB_NAME=SmartTodoWebAppDB" >> .env
+            echo "PORT=3306" >> .env
+            echo "API_BASE_URL=http://${{ needs.terraform-apply.outputs.web_server_2_public_ip }}" >> .env
+            npm install
+            sudo npm install -g pm2
+            pm2 start index.js
+            pm2 startup
+            pm2 save
+            sudo yum install -y nginx
+            sudo systemctl start nginx
+            sudo systemctl enable nginx
+            sudo rm /etc/nginx/nginx.conf
+            sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
+            events {
+                worker_connections 1024;
+            }
+            http {
+                server {
+                    listen 80;
+                    server_name _;
+                    location / {
+                        proxy_pass http://localhost:3000;
+                        proxy_http_version 1.1;
+                        proxy_set_header Upgrade \$http_upgrade;
+                        proxy_set_header Connection "upgrade";
+                        proxy_set_header Host \$host;
+                        proxy_cache_bypass \$http_upgrade;
+                    }
+                    location /static/ {
+                        root /home/ec2-user/${{ env.REPO_NAME }}/public;
+                    }
+                }
+            }
+            EOT'
+            sudo systemctl restart nginx
+          EOF

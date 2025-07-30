@@ -1,0 +1,5 @@
+domain_name       = "akuphecloud.com"
+route53_zone_id   = "Z07378212VY60RAWGVWV3"
+db_username       = "admin"
+db_password       = "Maluna51403739#?"
+key_pair_name     = "bastion-host-key"
