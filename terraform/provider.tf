@@ -1,5 +1,5 @@
 provider "aws" {
-  region = "us-east-2" # For most resources
+  region = "us-east-1" # For most resources
 }
 
 provider "aws" {
