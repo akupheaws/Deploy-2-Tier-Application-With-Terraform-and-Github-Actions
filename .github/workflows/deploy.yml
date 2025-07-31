@@ -26,6 +26,17 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Debug Terraform Files
+        working-directory: terraform
+        run: |
+          echo "Listing files in terraform/ directory:"
+          ls -la
+          echo "Content of provider.tf:"
+          cat provider.tf || echo "provider.tf not found"
+          echo "Content of backend.tf:"
+          cat backend.tf || echo "backend.tf not found"
+          echo "TF_STATE_BUCKET is ${{ secrets.TF_STATE_BUCKET }}"
+
       - name: Terraform Init
         working-directory: terraform
         run: |
@@ -35,7 +46,11 @@ jobs:
           region         = "us-east-1"
           dynamodb_table = "terraform-state-lock-db"
           EOF
+          echo "Content of backend.hcl:"
+          cat backend.hcl
           terraform init -backend-config=backend.hcl
+          echo "Backend configuration after init:"
+          terraform backend
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -82,6 +97,17 @@ jobs:
           name: terraform-plan
           path: terraform/
 
+      - name: Debug Terraform Files
+        working-directory: terraform
+        run: |
+          echo "Listing files in terraform/ directory:"
+          ls -la
+          echo "Content of provider.tf:"
+          cat provider.tf || echo "provider.tf not found"
+          echo "Content of backend.tf:"
+          cat backend.tf || echo "backend.tf not found"
+          echo "TF_STATE_BUCKET is ${{ secrets.TF_STATE_BUCKET }}"
+
       - name: Terraform Init
         working-directory: terraform
         run: |
@@ -91,7 +117,11 @@ jobs:
           region         = "us-east-1"
           dynamodb_table = "terraform-state-lock-db"
           EOF
+          echo "Content of backend.hcl:"
+          cat backend.hcl
           terraform init -backend-config=backend.hcl
+          echo "Backend configuration after init:"
+          terraform backend
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -169,7 +199,7 @@ jobs:
             echo "DB_HOST=${{ needs.terraform-apply.outputs.rds_endpoint }}" > .env
             echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
-            echo "DB_NAME=SmartTodoWebAppDB" >> .env
+            echo "DB_NAME=SmartTodoWebAppDB" > .env
             echo "PORT=3306" >> .env
             echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
             npm install
