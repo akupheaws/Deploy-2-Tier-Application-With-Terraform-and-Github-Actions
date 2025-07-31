@@ -1,4 +1,3 @@
-
 name: Deploy Two-Tier Web App to AWS
 
 on:
@@ -26,17 +25,6 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Debug Terraform Files
-        working-directory: terraform
-        run: |
-          echo "Listing files in terraform/ directory:"
-          ls -la
-          echo "Content of provider.tf:"
-          cat provider.tf || echo "provider.tf not found"
-          echo "Content of backend.tf:"
-          cat backend.tf || echo "backend.tf not found"
-          echo "TF_STATE_BUCKET is ${{ secrets.TF_STATE_BUCKET }}"
-
       - name: Terraform Init
         working-directory: terraform
         run: |
@@ -46,11 +34,7 @@ jobs:
           region         = "us-east-1"
           dynamodb_table = "terraform-state-lock-db"
           EOF
-          echo "Content of backend.hcl:"
-          cat backend.hcl
           terraform init -backend-config=backend.hcl
-          echo "Backend configuration after init:"
-          terraform backend
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -82,6 +66,12 @@ jobs:
     needs: terraform-validate-plan
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    outputs:
+      rds_endpoint: ${{ steps.tf-outputs.outputs.rds_endpoint }}
+      bastion_public_ip: ${{ steps.tf-outputs.outputs.bastion_public_ip }}
+      web_server_1_public_ip: ${{ steps.tf-outputs.outputs.web_server_1_public_ip }}
+      web_server_2_public_ip: ${{ steps.tf-outputs.outputs.web_server_2_public_ip }}
+      cloudfront_domain: ${{ steps.tf-outputs.outputs.cloudfront_domain }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -97,17 +87,6 @@ jobs:
           name: terraform-plan
           path: terraform/
 
-      - name: Debug Terraform Files
-        working-directory: terraform
-        run: |
-          echo "Listing files in terraform/ directory:"
-          ls -la
-          echo "Content of provider.tf:"
-          cat provider.tf || echo "provider.tf not found"
-          echo "Content of backend.tf:"
-          cat backend.tf || echo "backend.tf not found"
-          echo "TF_STATE_BUCKET is ${{ secrets.TF_STATE_BUCKET }}"
-
       - name: Terraform Init
         working-directory: terraform
         run: |
@@ -117,11 +96,7 @@ jobs:
           region         = "us-east-1"
           dynamodb_table = "terraform-state-lock-db"
           EOF
-          echo "Content of backend.hcl:"
-          cat backend.hcl
           terraform init -backend-config=backend.hcl
-          echo "Backend configuration after init:"
-          terraform backend
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -152,6 +127,11 @@ jobs:
     needs: terraform-apply
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    strategy:
+      matrix:
+        web_server_ip:
+          - ${{ needs.terraform-apply.outputs.web_server_1_public_ip }}
+          - ${{ needs.terraform-apply.outputs.web_server_2_public_ip }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -161,19 +141,15 @@ jobs:
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > bastion-host-key.pem
           chmod 600 bastion-host-key.pem
 
-      - name: Install MySQL Client on Runner
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mysql-client
-
       - name: Configure Database Schema via Bastion Host
+        if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip # Run this step only once
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             sudo wget https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm
             sudo dnf install mysql80-community-release-el9-1.noarch.rpm -y
             sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
             sudo dnf install mysql-community-client -y
-            mysql -h ${{ needs.terraform-apply.outputs.rds_endpoint }} -P 3306 -u ${{ secrets.DB_USERNAME }} -p${{ secrets.DB_PASSWORD }} << 'MYSQL'
+            mysql -h ${{ needs.terraform-apply.outputs.rds_endpoint }} -P 3306 -u ${{ secrets.DB_USERNAME }} -p'${{ secrets.DB_PASSWORD }}' << 'MYSQL'
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
               CREATE TABLE IF NOT EXISTS Tasks (
@@ -186,77 +162,36 @@ jobs:
             MYSQL
           EOF
 
-      - name: Deploy Application to EC2 Instance 1
+      - name: Deploy Application to ${{ matrix.web_server_ip }}
         run: |
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.web_server_1_public_ip }} << 'EOF'
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
+            # Install dependencies
             sudo yum update -y
             sudo yum install -y git
             curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
             sudo yum install -y nodejs
+            
+            # Clone repo and set up application
             git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
             cd ${{ env.REPO_NAME }}
             PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-            echo "DB_HOST=${{ needs.terraform-apply.outputs.rds_endpoint }}" > .env
-            echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
-            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
-            echo "DB_NAME=SmartTodoWebAppDB" > .env
-            echo "PORT=3306" >> .env
-            echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
-            npm install
-            sudo npm install -g pm2
-            pm2 start index.js
-            pm2 startup
-            pm2 save
-            sudo yum install -y nginx
-            sudo systemctl start nginx
-            sudo systemctl enable nginx
-            sudo rm /etc/nginx/nginx.conf
-            sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
-            events {
-                worker_connections 1024;
-            }
-            http {
-                server {
-                    listen 80;
-                    server_name _;
-                    location / {
-                        proxy_pass http://localhost:3000;
-                        proxy_http_version 1.1;
-                        proxy_set_header Upgrade \$http_upgrade;
-                        proxy_set_header Connection "upgrade";
-                        proxy_set_header Host \$host;
-                        proxy_cache_bypass \$http_upgrade;
-                    }
-                    location /static/ {
-                        root /home/ec2-user/${{ env.REPO_NAME }}/public;
-                    }
-                }
-            }
-            EOT'
-            sudo systemctl restart nginx
-          EOF
 
-      - name: Deploy Application to EC2 Instance 2
-        run: |
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.web_server_2_public_ip }} << 'EOF'
-            sudo yum update -y
-            sudo yum install -y git
-            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-            sudo yum install -y nodejs
-            git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
-            cd ${{ env.REPO_NAME }}
-            PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+            # Create .env file correctly
             echo "DB_HOST=${{ needs.terraform-apply.outputs.rds_endpoint }}" > .env
             echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
             echo "DB_NAME=SmartTodoWebAppDB" >> .env
             echo "PORT=3306" >> .env
             echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
+
+            # Install app dependencies and run with pm2
             npm install
             sudo npm install -g pm2
             pm2 start index.js
             pm2 startup
             pm2 save
+
+            # Configure and restart nginx
             sudo yum install -y nginx
             sudo systemctl start nginx
             sudo systemctl enable nginx
