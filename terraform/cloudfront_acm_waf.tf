@@ -1,6 +1,6 @@
 provider "aws" {
   
-  region = "us-east-1"
+  region = "us-east-2"
 }
 
 resource "aws_acm_certificate" "cert_cloudfront" {
