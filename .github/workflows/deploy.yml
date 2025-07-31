@@ -248,4 +248,3 @@ jobs:
             EOT'
             sudo systemctl restart nginx
           EOF
-#
