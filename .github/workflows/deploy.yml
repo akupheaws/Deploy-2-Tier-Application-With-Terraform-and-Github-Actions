@@ -9,7 +9,7 @@ on:
       - master
 
 env:
-  AWS_REGION: us-east-2
+  AWS_REGION: us-east-1
   TF_VERSION: 1.5.0
   REPO_NAME: 2-tier-to-do-list-web-application
 
@@ -27,7 +27,7 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -backend-config="key=state" -backend-config="region=us-east-1" -backend-config="dynamodb_table=state-locking"
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -backend-config="key=global/s3/terraform.tfstate" -backend-config="region=${{ env.AWS_REGION }}" -backend-config="dynamodb_table=terraform-state-lock-db"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -58,7 +58,7 @@ jobs:
   terraform-apply:
     needs: terraform-validate-plan
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -76,7 +76,7 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -backend-config="key=state" -backend-config="region=us-east-1" -backend-config="dynamodb_table=state-locking"
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -backend-config="key=global/s3/terraform.tfstate" -backend-config="region=${{ env.AWS_REGION }}" -backend-config="dynamodb_table=terraform-state-lock-db"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -97,16 +97,16 @@ jobs:
         id: tf-outputs
         working-directory: terraform
         run: |
-          echo "rds_endpoint=$(terraform output -raw rds_endpoint || echo '')" >> $GITHUB_OUTPUT
-          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain || echo '')" >> $GITHUB_OUTPUT
+          echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
+          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
+          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip)" >> $GITHUB_OUTPUT
+          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip)" >> $GITHUB_OUTPUT
+          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain)" >> $GITHUB_OUTPUT
 
   deploy-application:
     needs: terraform-apply
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
