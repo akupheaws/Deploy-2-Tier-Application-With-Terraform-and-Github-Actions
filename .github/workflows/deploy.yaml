@@ -1,0 +1,91 @@
+jobs:
+  terraform-validate-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -backend-config="key=global/s3/terraform.tfstate" -backend-config="region=us-east-1" -backend-config="dynamodb_table=terraform-state-lock-db"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -out=tfplan
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/tfplan
+          retention-days: 1
+
+  terraform-apply:
+    needs: terraform-validate-plan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -backend-config="key=global/s3/terraform.tfstate" -backend-config="region=us-east-1" -backend-config="dynamodb_table=terraform-state-lock-db"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Apply Certificates
+        working-directory: terraform
+        run: terraform apply -auto-approve -target=aws_acm_certificate.cert_cloudfront -target=aws_acm_certificate.cert_alb
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve tfplan
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
