@@ -1,3 +1,7 @@
+provider "aws" {
+  
+  region = "us-east-1"
+}
 
 resource "aws_acm_certificate" "cert_cloudfront" {
   provider                  = aws.us-east-1
