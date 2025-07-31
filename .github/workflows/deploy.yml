@@ -1,3 +1,4 @@
+
 name: Deploy Two-Tier Web App to AWS
 
 on:
@@ -27,11 +28,14 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init \
-          -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-          -backend-config="key=global/s3/terraform.tfstate" \
-          -backend-config="region=us-east-1" \
-          -backend-config="dynamodb_table=terraform-state-lock-db"
+        run: |
+          cat << EOF > backend.hcl
+          bucket         = "${{ secrets.TF_STATE_BUCKET }}"
+          key            = "global/s3/terraform.tfstate"
+          region         = "us-east-1"
+          dynamodb_table = "terraform-state-lock-db"
+          EOF
+          terraform init -backend-config=backend.hcl
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -80,11 +84,14 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init \
-          -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-          -backend-config="key=global/s3/terraform.tfstate" \
-          -backend-config="region=us-east-1" \
-          -backend-config="dynamodb_table=terraform-state-lock-db"
+        run: |
+          cat << EOF > backend.hcl
+          bucket         = "${{ secrets.TF_STATE_BUCKET }}"
+          key            = "global/s3/terraform.tfstate"
+          region         = "us-east-1"
+          dynamodb_table = "terraform-state-lock-db"
+          EOF
+          terraform init -backend-config=backend.hcl
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
