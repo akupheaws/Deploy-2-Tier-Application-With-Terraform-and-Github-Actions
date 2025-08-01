@@ -171,31 +171,34 @@ jobs:
             sudo npm install -g pm2
 
             echo ">>> Starting app"
-            pm2 start index.js || pm2 restart index.js
+            # Restart the app to apply new .env variables, or start it if it doesn't exist.
+            pm2 restart index.js --update-env || pm2 start index.js
             pm2 save
+            # This command is for setting up PM2 to start on system boot.
             sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user
 
             echo ">>> Configuring NGINX"
-            sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
-            events {
-              worker_connections 1024;
-            }
-            http {
-              server {
+            # Create a server block for the Node.js application. This is safer than
+            # overwriting the entire default nginx.conf.
+            # Using a quoted delimiter 'EOT' prevents the shell from expanding variables
+            # like $host, ensuring they are passed literally to the NGINX config file.
+            sudo tee /etc/nginx/conf.d/default.conf > /dev/null <<'EOT'
+            server {
                 listen 80;
                 server_name _;
-                location / {
-                  proxy_pass http://localhost:3000;
-                  proxy_http_version 1.1;
-                  proxy_set_header Upgrade \$http_upgrade;
-                  proxy_set_header Connection "upgrade";
-                  proxy_set_header Host \$host;
-                  proxy_cache_bypass \$http_upgrade;
-                }
-              }
-            }
-            EOT'
 
+                location / {
+                    proxy_pass http://127.0.0.1:3000;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $http_upgrade;
+                    proxy_set_header Connection 'upgrade';
+                    proxy_set_header Host $host;
+                    proxy_cache_bypass $http_upgrade;
+                }
+            }
+EOT
+
+            # Restart NGINX to apply the new configuration.
             sudo systemctl restart nginx
             sudo systemctl enable nginx
 
