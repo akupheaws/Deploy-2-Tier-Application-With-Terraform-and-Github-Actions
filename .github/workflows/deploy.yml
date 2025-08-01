@@ -150,7 +150,7 @@ jobs:
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             set -e # Exit if any command fails
 
-            # UPDATED: Force package list update before installing
+            # UPDATED: Force package list update and install the compatible MariaDB client
             sudo dnf update -y
             sudo dnf install -y mariadb
 
