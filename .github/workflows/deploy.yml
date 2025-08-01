@@ -173,15 +173,22 @@ jobs:
             set -e
             echo ">>> Updating"
             sudo dnf update -y
+
             echo ">>> Installing Git and Nginx"
             sudo dnf install -y git nginx
+
             echo ">>> Installing Node.js 18"
             curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
             sudo dnf install -y nodejs
+
+            echo ">>> Removing old repo if exists"
+            rm -rf Deploy-2-Tier-Application-With-Terraform-and-Github-Actions
+
             echo ">>> Cloning repo"
             git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
             cd ${{ env.REPO_NAME }}
-            echo ">>> Configuring .env"
+
+            echo ">>> Creating .env file"
             RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
             PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             echo "DB_HOST=$RDS_HOSTNAME" > .env
@@ -190,14 +197,18 @@ jobs:
             echo "DB_NAME=SmartTodoWebAppDB" >> .env
             echo "PORT=3306" >> .env
             echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
+
             echo ">>> Installing app dependencies"
             npm install
+
             echo ">>> Installing PM2"
             sudo npm install -g pm2
+
             echo ">>> Starting app"
             pm2 start index.js
             pm2 save
             env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user
+
             echo ">>> Configuring NGINX"
             sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
             events { worker_connections 1024; }
@@ -216,8 +227,10 @@ jobs:
               }
             }
             EOT'
+
             sudo systemctl restart nginx
             sudo systemctl enable nginx
-            echo ">>> Deployment completed."
+
+            echo ">>> App Deployed Successfully!"
             sleep 10
           EOF
