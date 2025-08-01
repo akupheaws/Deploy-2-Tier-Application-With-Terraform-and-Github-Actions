@@ -154,12 +154,15 @@ jobs:
             sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
             sudo yum install -y mysql-community-client
 
-            # THE FIX IS HERE: Separate the hostname from the full endpoint string
+            # Separate the hostname from the full endpoint string
             FULL_RDS_ENDPOINT="${{ needs.terraform-apply.outputs.rds_endpoint }}"
             RDS_HOSTNAME=$(echo $FULL_RDS_ENDPOINT | cut -d: -f1)
             
-            # Use the corrected hostname variable in the mysql command
-            mysql -h "$RDS_HOSTNAME" -P 3306 -u ${{ secrets.DB_USERNAME }} -p'${{ secrets.DB_PASSWORD }}' << 'MYSQL'
+            # THE FIX IS HERE: Use an environment variable for the password to avoid shell conflicts
+            export MYSQL_PWD='${{ secrets.DB_PASSWORD }}'
+            
+            # Connect without the -p flag; the client will automatically use MYSQL_PWD
+            mysql -h "$RDS_HOSTNAME" -P 3306 -u ${{ secrets.DB_USERNAME }} << 'MYSQL'
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
               CREATE TABLE IF NOT EXISTS Tasks (
@@ -170,6 +173,9 @@ jobs:
                 completed BOOLEAN DEFAULT FALSE
               );
             MYSQL
+            
+            # Unset the variable for security
+            unset MYSQL_PWD
           EOF
 
       - name: Deploy Application to ${{ matrix.web_server_ip }}
