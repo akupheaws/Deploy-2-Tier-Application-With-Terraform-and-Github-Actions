@@ -113,6 +113,9 @@ jobs:
           echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip || echo '')" >> $GITHUB_OUTPUT
           echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip || echo '')" >> $GITHUB_OUTPUT
           echo "cloudfront_domain=$(terraform output -raw cloudfront_domain || echo '')" >> $GITHUB_OUTPUT
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
   deploy-application:
     needs: terraform-apply
@@ -124,20 +127,20 @@ jobs:
           - ${{ needs.terraform-apply.outputs.web_server_1_public_ip }}
           - ${{ needs.terraform-apply.outputs.web_server_2_public_ip }}
     steps:
-      - name: Check for Missing Web Server IP
+      - name: Skip if Missing Web Server IP
         if: matrix.web_server_ip == ''
         run: |
-          echo "::error::Missing web server IP. Terraform may have failed."
+          echo "::error::Missing web server IP. Skipping deployment."
           exit 1
 
       - uses: actions/checkout@v4
 
-      - name: Setup SSH Key
+      - name: Set Up SSH Key
         run: |
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > bastion-host-key.pem
           chmod 600 bastion-host-key.pem
 
-      - name: Configure RDS Schema (First Web Server Only)
+      - name: Configure Database (First Web Only)
         if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip
         run: |
           if [ -z "${{ needs.terraform-apply.outputs.bastion_public_ip }}" ]; then
@@ -163,11 +166,6 @@ jobs:
 
       - name: Deploy Node.js App
         run: |
-          if [ -z "${{ matrix.web_server_ip }}" ]; then
-            echo "::error::Web server IP is empty. Aborting deployment."
-            exit 1
-          fi
-
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
             sudo dnf update -y
             sudo dnf install -y git nginx
@@ -176,12 +174,12 @@ jobs:
             git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
             cd ${{ env.REPO_NAME }}
             RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
+            PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             echo "DB_HOST=$RDS_HOSTNAME" > .env
             echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
             echo "DB_NAME=SmartTodoWebAppDB" >> .env
             echo "PORT=3306" >> .env
-            PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
             npm install
             sudo npm install -g pm2
