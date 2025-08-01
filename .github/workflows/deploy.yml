@@ -3,8 +3,6 @@ name: Deploy Two-Tier Web App to AWS
 on:
   push:
     branches: [master]
-  pull_request:
-    branches: [master]
 
 env:
   AWS_REGION: us-east-1
@@ -12,60 +10,14 @@ env:
   REPO_NAME: Deploy-2-Tier-Application-With-Terraform-and-Github-Actions
 
 jobs:
-  terraform-validate-plan:
+  terraform:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Terraform Init
-        working-directory: terraform
-        run: |
-          cat <<EOF > backend.hcl
-          bucket         = "${{ secrets.TF_STATE_BUCKET }}"
-          key            = "global/s3/terraform.tfstate"
-          region         = "${{ env.AWS_REGION }}"
-          dynamodb_table = "terraform-state-lock-db"
-          EOF
-          terraform init -backend-config=backend.hcl
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-      - name: Terraform Validate
-        working-directory: terraform
-        run: terraform validate
-
-      - name: Terraform Plan
-        working-directory: terraform
-        run: terraform plan -out=tfplan
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
-          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
-          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
-          TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan
-          path: terraform/tfplan
-
-  terraform-apply:
-    needs: terraform-validate-plan
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     outputs:
-      rds_endpoint: ${{ steps.tf-outputs.outputs.rds_endpoint }}
-      bastion_public_ip: ${{ steps.tf-outputs.outputs.bastion_public_ip }}
-      web_server_1_public_ip: ${{ steps.tf-outputs.outputs.web_server_1_public_ip }}
-      web_server_2_public_ip: ${{ steps.tf-outputs.outputs.web_server_2_public_ip }}
-      cloudfront_domain: ${{ steps.tf-outputs.outputs.cloudfront_domain }}
+      rds_endpoint: ${{ steps.outputs.outputs.rds_endpoint }}
+      bastion_public_ip: ${{ steps.outputs.outputs.bastion_public_ip }}
+      web_server_1: ${{ steps.outputs.outputs.web_server_1 }}
+      web_server_2: ${{ steps.outputs.outputs.web_server_2 }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -73,12 +25,7 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: terraform-plan
-          path: terraform
-
-      - name: Terraform Init
+      - name: Terraform Init & Plan
         working-directory: terraform
         run: |
           cat <<EOF > backend.hcl
@@ -88,6 +35,7 @@ jobs:
           dynamodb_table = "terraform-state-lock-db"
           EOF
           terraform init -backend-config=backend.hcl
+          terraform plan -out=tfplan
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -98,139 +46,101 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
           TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
 
-      - name: Get Outputs Safely
-        id: tf-outputs
+      - name: Export Outputs
+        id: outputs
         working-directory: terraform
         run: |
-          echo "rds_endpoint=$(terraform output -raw rds_endpoint || echo '')" >> $GITHUB_OUTPUT
-          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain || echo '')" >> $GITHUB_OUTPUT
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
+          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
+          echo "web_server_1=$(terraform output -raw web_server_1_public_ip)" >> $GITHUB_OUTPUT
+          echo "web_server_2=$(terraform output -raw web_server_2_public_ip)" >> $GITHUB_OUTPUT
 
-  deploy-application:
-    needs: terraform-apply
+  deploy:
+    needs: terraform
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     strategy:
       matrix:
-        web_server_ip:
-          - ${{ needs.terraform-apply.outputs.web_server_1_public_ip }}
-          - ${{ needs.terraform-apply.outputs.web_server_2_public_ip }}
-    steps:
-      - name: Check for Web Server IP
-        if: matrix.web_server_ip == ''
-        run: |
-          echo "::error::Missing web server IP. Skipping deployment."
-          exit 1
+        web_ip: [ "${{ needs.terraform.outputs.web_server_1 }}", "${{ needs.terraform.outputs.web_server_2 }}" ]
 
+    steps:
       - uses: actions/checkout@v4
 
-      - name: Set Up SSH Key
+      - name: Prepare SSH Key
         run: |
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > bastion-host-key.pem
           chmod 600 bastion-host-key.pem
 
-      - name: Configure Database (First Web Only)
-        if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip
+      - name: Deploy App to EC2
         run: |
-          if [ -z "${{ needs.terraform-apply.outputs.bastion_public_ip }}" ]; then
-            echo "::error::Missing Bastion IP. Skipping DB setup."
-            exit 1
-          fi
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_ip }} << EOF
+          set -e
+          echo ">>> Updating"
+          sudo dnf update -y
 
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
-            set -e
-            sudo dnf update -y
-            sudo dnf install -y https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm --nogpgcheck
-            sudo dnf install -y mysql --nogpgcheck
-            RDS_HOST=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
-            mysql -h "$RDS_HOST" -P 3306 -u "${{ secrets.DB_USERNAME }}" -p"${{ secrets.DB_PASSWORD }}" -e "
-              CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
-              USE SmartTodoWebAppDB;
-              CREATE TABLE IF NOT EXISTS Tasks (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                task_name VARCHAR(255) NOT NULL,
-                task_description TEXT,
-                due_date DATE,
-                completed BOOLEAN DEFAULT FALSE
-              );
-            "
-          EOF
+          echo ">>> Installing Git and Nginx"
+          sudo dnf install -y git nginx
 
-      - name: Deploy Node.js App
-        run: |
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
-            set -e
-            echo ">>> Updating"
-            sudo dnf update -y
+          echo ">>> Installing Node.js 18"
+          curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+          sudo dnf install -y nodejs
 
-            echo ">>> Installing Git and Nginx"
-            sudo dnf install -y git nginx
+          echo ">>> Removing old repo if exists"
+          rm -rf ${{ env.REPO_NAME }}
 
-            echo ">>> Installing Node.js 18"
-            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-            sudo dnf install -y nodejs
+          echo ">>> Cloning repo"
+          git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
+          cd ${{ env.REPO_NAME }}
 
-            echo ">>> Removing old repo if exists"
-            rm -rf Deploy-2-Tier-Application-With-Terraform-and-Github-Actions
+          echo ">>> Creating .env file"
+          RDS_HOSTNAME=$(echo "${{ needs.terraform.outputs.rds_endpoint }}" | cut -d: -f1)
+          PUBLIC_IP=\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+          echo "DB_HOST=\$RDS_HOSTNAME" > .env
+          echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
+          echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+          echo "DB_NAME=SmartTodoWebAppDB" >> .env
+          echo "PORT=3306" >> .env
+          echo "API_BASE_URL=http://\$PUBLIC_IP" >> .env
 
-            echo ">>> Cloning repo"
-            git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
-            cd ${{ env.REPO_NAME }}
+          echo ">>> Installing app dependencies"
+          npm install
 
-            echo ">>> Creating .env file"
-            RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
-            PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-            echo "DB_HOST=$RDS_HOSTNAME" > .env
-            echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
-            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
-            echo "DB_NAME=SmartTodoWebAppDB" >> .env
-            echo "PORT=3306" >> .env
-            echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
+          echo ">>> Installing PM2"
+          sudo npm install -g pm2
 
-            echo ">>> Installing app dependencies"
-            npm install
+          echo ">>> Starting app"
+          pm2 start index.js || pm2 restart index.js
+          pm2 save
+          sudo env PATH=\$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user || true
 
-            echo ">>> Installing PM2"
-            sudo npm install -g pm2
-
-            echo ">>> Starting app"
-            pm2 start index.js || pm2 restart index.js
-            pm2 save
-            sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user || true
-
-            echo ">>> Configuring NGINX"
-            sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
-            events { worker_connections 1024; }
-            http {
-              server {
-                listen 80;
-                server_name _;
-                location / {
-                  proxy_pass http://localhost:3000;
-                  proxy_http_version 1.1;
-                  proxy_set_header Upgrade \$http_upgrade;
-                  proxy_set_header Connection "upgrade";
-                  proxy_set_header Host \$host;
-                  proxy_cache_bypass \$http_upgrade;
-                }
+          echo ">>> Configuring NGINX"
+          sudo bash -c 'cat > /etc/nginx/nginx.conf' <<EOT
+          events {
+            worker_connections 1024;
+          }
+          http {
+            server {
+              listen 80;
+              server_name _;
+              location / {
+                proxy_pass http://localhost:3000;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade \$http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host \$host;
+                proxy_cache_bypass \$http_upgrade;
               }
             }
-            EOT'
+          }
+          EOT
 
-            sudo systemctl restart nginx
-            sudo systemctl enable nginx
-
-            echo ">>> App Deployed Successfully!"
-            sleep 10
+          sudo systemctl restart nginx
+          sudo systemctl enable nginx
+          echo ">>> App Deployed Successfully!"
+          sleep 5
           EOF
