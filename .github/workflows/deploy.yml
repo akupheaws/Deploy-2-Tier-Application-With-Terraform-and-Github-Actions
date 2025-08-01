@@ -116,7 +116,6 @@ jobs:
       - name: Get Outputs
         id: tf-outputs
         working-directory: terraform
-        # THIS ENV BLOCK IS THE FIX. It provides credentials to the terraform output command.
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -150,9 +149,11 @@ jobs:
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             sudo wget https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm
-            sudo dnf install mysql80-community-release-el9-1.noarch.rpm -y
+            # THE FIX IS HERE: Use yum instead of dnf
+            sudo yum install mysql80-community-release-el9-1.noarch.rpm -y
             sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
-            sudo dnf install mysql-community-client -y
+            # AND HERE: Use yum instead of dnf
+            sudo yum install mysql-community-client -y
             mysql -h ${{ needs.terraform-apply.outputs.rds_endpoint }} -P 3306 -u ${{ secrets.DB_USERNAME }} -p'${{ secrets.DB_PASSWORD }}' << 'MYSQL'
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
