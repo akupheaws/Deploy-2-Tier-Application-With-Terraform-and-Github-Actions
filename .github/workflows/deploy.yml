@@ -148,12 +148,18 @@ jobs:
         if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip # Run this step only once
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
-            # THE FIX IS HERE: Use the el7 package compatible with Amazon Linux 2
+            # Install MySQL Client
             sudo wget https://dev.mysql.com/get/mysql80-community-release-el7-3.noarch.rpm
             sudo yum localinstall mysql80-community-release-el7-3.noarch.rpm -y
             sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
-            sudo yum install mysql-community-client -y
-            mysql -h ${{ needs.terraform-apply.outputs.rds_endpoint }} -P 3306 -u ${{ secrets.DB_USERNAME }} -p'${{ secrets.DB_PASSWORD }}' << 'MYSQL'
+            sudo yum install -y mysql-community-client
+
+            # THE FIX IS HERE: Separate the hostname from the full endpoint string
+            FULL_RDS_ENDPOINT="${{ needs.terraform-apply.outputs.rds_endpoint }}"
+            RDS_HOSTNAME=$(echo $FULL_RDS_ENDPOINT | cut -d: -f1)
+            
+            # Use the corrected hostname variable in the mysql command
+            mysql -h "$RDS_HOSTNAME" -P 3306 -u ${{ secrets.DB_USERNAME }} -p'${{ secrets.DB_PASSWORD }}' << 'MYSQL'
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
               CREATE TABLE IF NOT EXISTS Tasks (
