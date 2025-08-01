@@ -102,4 +102,4 @@ resource "aws_route_table_association" "private_b" {
   route_table_id = aws_route_table.private.id
 }
 
-// Security Group for web servers
+// Security Group for web server
