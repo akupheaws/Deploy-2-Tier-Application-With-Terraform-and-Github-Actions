@@ -151,9 +151,13 @@ jobs:
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             set -e
             sudo dnf update -y
-            sudo dnf install -y https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm
-            sudo dnf install -y mysql
+
+            # Install MySQL client for Amazon Linux 2023 (with GPG check disabled)
+            sudo dnf install -y https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm --nogpgcheck
+            sudo dnf install -y mysql --nogpgcheck
+
             RDS_HOST=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
+
             mysql -h "$RDS_HOST" -P 3306 -u "${{ secrets.DB_USERNAME }}" -p"${{ secrets.DB_PASSWORD }}" -e "
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
