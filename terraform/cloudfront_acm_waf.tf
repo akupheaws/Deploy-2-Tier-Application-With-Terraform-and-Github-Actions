@@ -1,5 +1,3 @@
-
-
 resource "aws_acm_certificate" "cert_cloudfront" {
   provider                  = aws.us-east-1
   domain_name               = var.domain_name
@@ -22,17 +20,23 @@ resource "aws_acm_certificate" "cert_alb" {
 
 resource "aws_route53_record" "cert_validation" {
   for_each = {
-    for dvo in aws_acm_certificate.cert_cloudfront.domain_validation_options : dvo.domain_name => {
+    # Flatten combines the validation options from BOTH certificates into one list.
+    # This ensures DNS records are created for both the CloudFront and ALB certs.
+    for dvo in flatten([
+      aws_acm_certificate.cert_cloudfront.domain_validation_options,
+      aws_acm_certificate.cert_alb.domain_validation_options
+    ]) : dvo.resource_record_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
     }
   }
-  zone_id = var.route53_zone_id
-  name    = each.value.name
-  type    = each.value.type
-  records = [each.value.record]
-  ttl     = 60
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = var.route53_zone_id
 }
 
 resource "aws_acm_certificate_validation" "cert_cloudfront" {
@@ -76,13 +80,13 @@ resource "aws_cloudfront_distribution" "cdn" {
       }
     }
     viewer_protocol_policy = "redirect-to-https"
-    min_ttl               = 0
-    default_ttl           = 3600
-    max_ttl               = 86400
+    min_ttl                = 0
+    default_ttl            = 3600
+    max_ttl                = 86400
   }
 
   viewer_certificate {
-    acm_certificate_arn = aws_acm_certificate.cert_cloudfront.arn
+    acm_certificate_arn = aws_acm_certificate_validation.cert_cloudfront.certificate_arn
     ssl_support_method  = "sni-only"
   }
 
@@ -97,8 +101,6 @@ resource "aws_cloudfront_distribution" "cdn" {
   tags = {
     Name = "SmartTodoWebApp-CDN"
   }
-
-  depends_on = [aws_acm_certificate_validation.cert_cloudfront]
 }
 
 resource "aws_wafv2_web_acl" "waf" {
