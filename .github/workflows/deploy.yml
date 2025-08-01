@@ -205,9 +205,9 @@ jobs:
             sudo npm install -g pm2
 
             echo ">>> Starting app"
-            pm2 start index.js
+            pm2 start index.js || pm2 restart index.js
             pm2 save
-            sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user
+            sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user || true
 
             echo ">>> Configuring NGINX"
             sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
