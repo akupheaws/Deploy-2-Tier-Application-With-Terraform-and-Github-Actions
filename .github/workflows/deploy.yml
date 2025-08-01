@@ -10,22 +10,20 @@ env:
   REPO_NAME: Deploy-2-Tier-Application-With-Terraform-and-Github-Actions
 
 jobs:
-  terraform:
+  terraform-validate-plan:
     runs-on: ubuntu-latest
     outputs:
-      rds_endpoint: ${{ steps.outputs.outputs.rds_endpoint }}
-      bastion_public_ip: ${{ steps.outputs.outputs.bastion_public_ip }}
-      web_server_1: ${{ steps.outputs.outputs.web_server_1 }}
-      web_server_2: ${{ steps.outputs.outputs.web_server_2 }}
-
+      tfplan-path: terraform/tfplan
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Terraform Init & Plan
+      - name: Terraform Init
         working-directory: terraform
         run: |
           cat <<EOF > backend.hcl
@@ -35,7 +33,66 @@ jobs:
           dynamodb_table = "terraform-state-lock-db"
           EOF
           terraform init -backend-config=backend.hcl
-          terraform plan -out=tfplan
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -out=tfplan
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/tfplan
+          retention-days: 1
+
+  terraform-apply:
+    needs: terraform-validate-plan
+    runs-on: ubuntu-latest
+    outputs:
+      rds_endpoint: ${{ steps.tf-outputs.outputs.rds_endpoint }}
+      bastion_public_ip: ${{ steps.tf-outputs.outputs.bastion_public_ip }}
+      web_server_1_public_ip: ${{ steps.tf-outputs.outputs.web_server_1_public_ip }}
+      web_server_2_public_ip: ${{ steps.tf-outputs.outputs.web_server_2_public_ip }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          cat <<EOF > backend.hcl
+          bucket         = "${{ secrets.TF_STATE_BUCKET }}"
+          key            = "global/s3/terraform.tfstate"
+          region         = "${{ env.AWS_REGION }}"
+          dynamodb_table = "terraform-state-lock-db"
+          EOF
+          terraform init -backend-config=backend.hcl
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -46,39 +103,41 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
           TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
-          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-          TF_VAR_route53_zone_id: ${{ secrets.ROUTE53_ZONE_ID }}
 
-      - name: Export Outputs
-        id: outputs
+      - name: Get Terraform Outputs
+        id: tf-outputs
         working-directory: terraform
         run: |
-          echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
-          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
-          echo "web_server_1=$(terraform output -raw web_server_1_public_ip)" >> $GITHUB_OUTPUT
-          echo "web_server_2=$(terraform output -raw web_server_2_public_ip)" >> $GITHUB_OUTPUT
+          echo "rds_endpoint=$(terraform output -raw rds_endpoint || echo '')" >> $GITHUB_OUTPUT
+          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip || echo '')" >> $GITHUB_OUTPUT
+          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip || echo '')" >> $GITHUB_OUTPUT
+          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip || echo '')" >> $GITHUB_OUTPUT
 
-  deploy:
-    needs: terraform
+  deploy-application:
+    needs: terraform-apply
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        web_ip: [ "${{ needs.terraform.outputs.web_server_1 }}", "${{ needs.terraform.outputs.web_server_2 }}" ]
-
+        web_server_ip:
+          - ${{ needs.terraform-apply.outputs.web_server_1_public_ip }}
+          - ${{ needs.terraform-apply.outputs.web_server_2_public_ip }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Prepare SSH Key
+      - name: Setup SSH Key
         run: |
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > bastion-host-key.pem
           chmod 600 bastion-host-key.pem
 
-      - name: Deploy App to EC2
+      - name: Deploy App to Web Server
         run: |
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_ip }} << EOF
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << EOF
           set -e
           echo ">>> Updating"
           sudo dnf update -y
@@ -98,7 +157,7 @@ jobs:
           cd ${{ env.REPO_NAME }}
 
           echo ">>> Creating .env file"
-          RDS_HOSTNAME=$(echo "${{ needs.terraform.outputs.rds_endpoint }}" | cut -d: -f1)
+          RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
           PUBLIC_IP=\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
           echo "DB_HOST=\$RDS_HOSTNAME" > .env
           echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
