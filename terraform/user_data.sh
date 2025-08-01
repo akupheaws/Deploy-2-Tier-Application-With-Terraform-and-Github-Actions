@@ -1,23 +1,23 @@
 #!/bin/bash
-set -e # Exit immediately if a command exits with a non-zero status.
+set -e  # Exit immediately if a command exits with a non-zero status
 
 # Define repo name as a variable
 REPO_NAME="Deploy-2-Tier-Application-With-Terraform-and-Github-Actions"
 APP_DIR="/home/ec2-user/$REPO_NAME"
 
-# Install dependencies
-yum update -y
-yum install -y git
-curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-yum install -y nodejs
+# Install required system packages using DNF (Amazon Linux 2023)
+sudo dnf update -y
+sudo dnf install -y git gcc-c++ make nginx
+
+# Enable and install Node.js 20 module (compatible with AL2023)
+sudo dnf module enable nodejs:20 -y
+sudo dnf install -y nodejs
 
 # Clone the application
 git clone "https://github.com/akupheaws/$REPO_NAME.git"
 cd "$APP_DIR"
 
-# Create .env file
-# NOTE: Storing passwords in plaintext is a security risk.
-# Use a service like AWS Secrets Manager in production.
+# Create .env file using environment variables (replace these at runtime or use Terraform interpolation)
 echo "DB_HOST=${rds_endpoint}" > .env
 echo "DB_USER=${db_username}" >> .env
 echo "DB_PASSWORD=${db_password}" >> .env
@@ -27,21 +27,19 @@ echo "API_BASE_URL=http://${public_ip}" >> .env
 
 # Install app dependencies and run with PM2
 npm install
-npm install -g pm2
+sudo npm install -g pm2
 pm2 start index.js
 pm2 save
 
-# Correctly set up PM2 to start on boot
-# This captures the output of 'pm2 startup' and runs it with sudo.
+# Set up PM2 to start on boot for ec2-user
 env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user
 
-# Install and configure Nginx
-yum install -y nginx
-systemctl start nginx
-systemctl enable nginx
+# Start and enable nginx
+sudo systemctl start nginx
+sudo systemctl enable nginx
 
 # Overwrite the Nginx configuration
-cat <<EOT > /etc/nginx/nginx.conf
+sudo bash -c "cat > /etc/nginx/nginx.conf" <<EOT
 events {
     worker_connections 1024;
 }
@@ -58,11 +56,11 @@ http {
             proxy_cache_bypass \$http_upgrade;
         }
         location /static/ {
-            # Use the variable for a robust path
-            root "$APP_DIR/public";
+            root $APP_DIR/public;
         }
     }
 }
 EOT
 
-systemctl restart nginx
+# Restart Nginx to apply new config
+sudo systemctl restart nginx
