@@ -1,30 +1,16 @@
 #!/bin/bash
-# Enable verbose logging for easier debugging
 set -x
 
-# Update all packages on the system
+# Update all packages
 sudo dnf update -y
 
-# Clean old or broken GPG keys for MySQL (if installed before)
-sudo rpm -e gpg-pubkey-5072e1f5* || true
+# Install required packages
+sudo dnf install -y git nginx mariadb
 
-# Import the correct latest GPG key from MySQL
-sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2022
+# Install Node.js 16 from official NodeSource
+curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
+sudo dnf install -y nodejs
 
-# Optional: Clean any previously cached packages
-sudo dnf clean packages
-
-# Install Apache web server (httpd), PHP, and the MySQL driver for PHP
-# Note: This is an example for a PHP app; your actual app uses Node.js,
-# which is installed later by the GitHub Actions workflow.
-# This script still provides a valid base system.
-sudo dnf install -y httpd php php-mysqlnd
-
-# Install the MariaDB package (which provides the `mysql` client on AL2023)
-sudo dnf install -y mariadb
-
-# Start the Apache web server
-sudo systemctl start httpd
-
-# Enable the Apache web server to start on boot
-sudo systemctl enable httpd
+# Enable and start nginx
+sudo systemctl enable nginx
+sudo systemctl start nginx

@@ -30,10 +30,49 @@ resource "aws_acm_certificate_validation" "cert_cloudfront" {
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
+resource "aws_wafv2_web_acl" "waf" {
+  provider = aws.us-east-1
+  name     = "SmartTodoWebApp-WAF"
+  scope    = "CLOUDFRONT"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "CommonRuleSet"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "SmartTodoWebAppWAF"
+    sampled_requests_enabled   = true
+  }
+}
+
 resource "aws_cloudfront_distribution" "cdn" {
   origin {
     domain_name = aws_lb.alb.dns_name
     origin_id   = "ALB"
+
     custom_origin_config {
       http_port              = 80
       https_port             = 443
@@ -45,19 +84,20 @@ resource "aws_cloudfront_distribution" "cdn" {
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
-
-  aliases = [var.domain_name, "www.${var.domain_name}"]
+  aliases             = [var.domain_name, "www.${var.domain_name}"]
 
   default_cache_behavior {
     allowed_methods  = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
     cached_methods   = ["GET", "HEAD"]
     target_origin_id = "ALB"
+
     forwarded_values {
       query_string = true
       cookies {
         forward = "all"
       }
     }
+
     viewer_protocol_policy = "redirect-to-https"
     min_ttl                = 0
     default_ttl            = 3600
@@ -79,37 +119,5 @@ resource "aws_cloudfront_distribution" "cdn" {
 
   tags = {
     Name = "SmartTodoWebApp-CDN"
-  }
-}
-
-resource "aws_wafv2_web_acl" "waf" {
-  provider = aws.us-east-1
-  name     = "SmartTodoWebApp-WAF"
-  scope    = "CLOUDFRONT"
-  default_action {
-    allow {}
-  }
-  rule {
-    name     = "AWSManagedRulesCommonRuleSet"
-    priority = 1
-    override_action {
-      none {}
-    }
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesCommonRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "CommonRuleSet"
-      sampled_requests_enabled   = true
-    }
-  }
-  visibility_config {
-    cloudwatch_metrics_enabled = true
-    metric_name                = "SmartTodoWebAppWAF"
-    sampled_requests_enabled   = true
   }
 }

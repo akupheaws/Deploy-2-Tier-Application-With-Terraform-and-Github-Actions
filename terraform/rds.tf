@@ -1,4 +1,4 @@
-resource "aws_db_instance" "rds" {
+resource "aws_db_instance" "main" {
   allocated_storage      = 20
   engine                 = "mysql"
   engine_version         = "8.0"
@@ -19,6 +19,7 @@ resource "aws_db_instance" "rds" {
 resource "aws_db_subnet_group" "rds_subnet_group" {
   name       = "smarttodowebapp-subnet-group"
   subnet_ids = [aws_subnet.private_a.id, aws_subnet.private_b.id]
+
   tags = {
     Name = "SmartTodoWebApp-Subnet-Group"
   }

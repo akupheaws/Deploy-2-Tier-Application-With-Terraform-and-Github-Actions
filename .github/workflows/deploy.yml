@@ -2,11 +2,9 @@ name: Deploy Two-Tier Web App to AWS
 
 on:
   push:
-    branches:
-      - master
+    branches: [master]
   pull_request:
-    branches:
-      - master
+    branches: [master]
 
 env:
   AWS_REGION: us-east-1
@@ -17,7 +15,7 @@ jobs:
   terraform-validate-plan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Terraform
@@ -28,7 +26,7 @@ jobs:
       - name: Terraform Init
         working-directory: terraform
         run: |
-          cat << EOF > backend.hcl
+          cat <<EOF > backend.hcl
           bucket         = "${{ secrets.TF_STATE_BUCKET }}"
           key            = "global/s3/terraform.tfstate"
           region         = "${{ env.AWS_REGION }}"
@@ -55,12 +53,11 @@ jobs:
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
 
-      - name: Upload Terraform Plan
+      - name: Upload Plan
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
           path: terraform/tfplan
-          retention-days: 1
 
   terraform-apply:
     needs: terraform-validate-plan
@@ -73,7 +70,7 @@ jobs:
       web_server_2_public_ip: ${{ steps.tf-outputs.outputs.web_server_2_public_ip }}
       cloudfront_domain: ${{ steps.tf-outputs.outputs.cloudfront_domain }}
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Terraform
@@ -81,16 +78,16 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Download Terraform Plan
+      - name: Download Plan
         uses: actions/download-artifact@v4
         with:
           name: terraform-plan
-          path: ${{ github.workspace }}/terraform
+          path: terraform
 
       - name: Terraform Init
         working-directory: terraform
         run: |
-          cat << EOF > backend.hcl
+          cat <<EOF > backend.hcl
           bucket         = "${{ secrets.TF_STATE_BUCKET }}"
           key            = "global/s3/terraform.tfstate"
           region         = "${{ env.AWS_REGION }}"
@@ -113,18 +110,15 @@ jobs:
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
 
-      - name: Get Outputs
+      - name: Get Terraform Outputs
         id: tf-outputs
         working-directory: terraform
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          echo "rds_endpoint=$(terraform output -raw rds_endpoint || echo '')" >> $GITHUB_OUTPUT
-          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip || echo '')" >> $GITHUB_OUTPUT
-          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain || echo '')" >> $GITHUB_OUTPUT
+          echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
+          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
+          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip)" >> $GITHUB_OUTPUT
+          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip)" >> $GITHUB_OUTPUT
+          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain)" >> $GITHUB_OUTPUT
 
   deploy-application:
     needs: terraform-apply
@@ -136,77 +130,58 @@ jobs:
           - ${{ needs.terraform-apply.outputs.web_server_1_public_ip }}
           - ${{ needs.terraform-apply.outputs.web_server_2_public_ip }}
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup SSH Key
+      - name: Set Up SSH Key
         run: |
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > bastion-host-key.pem
           chmod 600 bastion-host-key.pem
 
-      - name: Configure Database Schema via Bastion Host
+      - name: Initialize Database Schema
         if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip
         run: |
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
-            set -e # Exit if any command fails
-
-            # UPDATED: Force package list update and install the compatible MariaDB client
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << EOF
             sudo dnf update -y
             sudo dnf install -y mariadb
-
-            RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
-            mysql -h "$RDS_HOSTNAME" -P 3306 -u "${{ secrets.DB_USERNAME }}" -p"${{ secrets.DB_PASSWORD }}" -e "
+            mysql -h $(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1) \
+              -P 3306 -u "${{ secrets.DB_USERNAME }}" -p"${{ secrets.DB_PASSWORD }}" -e "
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
               CREATE TABLE IF NOT EXISTS Tasks (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 task_name VARCHAR(255) NOT NULL,
                 task_description TEXT,
-                due_date DATE NULL,
+                due_date DATE,
                 completed BOOLEAN DEFAULT FALSE
-              );
-            "
+              );"
           EOF
 
-      - name: Deploy Application to ${{ matrix.web_server_ip }}
+      - name: Deploy Node.js App to Web Server
         run: |
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
-            set -e # Exit if any command fails
-
-            # UPDATED FOR AL2023: Use dnf and install from default repos
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << EOF
+            set -e
             sudo dnf update -y
-            sudo dnf install -y git
-            
+            sudo dnf install -y git nginx
             curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
             sudo dnf install -y nodejs
-            sudo dnf install -y nginx
-
             git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
             cd ${{ env.REPO_NAME }}
-
             RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
-            PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-
             echo "DB_HOST=$RDS_HOSTNAME" > .env
             echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
             echo "DB_NAME=SmartTodoWebAppDB" >> .env
             echo "PORT=3306" >> .env
+            PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
-
             npm install
             sudo npm install -g pm2
             pm2 start index.js
             pm2 save
             env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user
-            
-            sudo systemctl start nginx
-            sudo systemctl enable nginx
-            sudo rm -f /etc/nginx/nginx.conf
             sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
-            events {
-              worker_connections 1024;
-            }
+            events { worker_connections 1024; }
             http {
               server {
                 listen 80;
@@ -219,11 +194,9 @@ jobs:
                   proxy_set_header Host \$host;
                   proxy_cache_bypass \$http_upgrade;
                 }
-                location /static/ {
-                  alias /home/ec2-user/${{ env.REPO_NAME }}/public/;
-                }
               }
             }
             EOT'
             sudo systemctl restart nginx
+            sudo systemctl enable nginx
           EOF
