@@ -145,23 +145,15 @@ jobs:
           chmod 600 bastion-host-key.pem
 
       - name: Configure Database Schema via Bastion Host
-        if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip
+        if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip # Run this step only once
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
-            set -e # Exit immediately if a command fails
-
-            # Install MySQL Client
+            # THE FIX IS HERE: Use the el7 package compatible with Amazon Linux 2
             sudo wget https://dev.mysql.com/get/mysql80-community-release-el7-3.noarch.rpm
             sudo yum localinstall mysql80-community-release-el7-3.noarch.rpm -y
             sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
-            sudo yum install -y mysql-community-client
-
-            # Separate the hostname from the full endpoint string
-            FULL_RDS_ENDPOINT="${{ needs.terraform-apply.outputs.rds_endpoint }}"
-            RDS_HOSTNAME=$(echo $FULL_RDS_ENDPOINT | cut -d: -f1)
-
-            # Store the SQL commands in a variable
-            SQL_SCRIPT=$(cat <<END_SQL
+            sudo yum install mysql-community-client -y
+            mysql -h ${{ needs.terraform-apply.outputs.rds_endpoint }} -P 3306 -u ${{ secrets.DB_USERNAME }} -p'${{ secrets.DB_PASSWORD }}' << 'MYSQL'
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
               CREATE TABLE IF NOT EXISTS Tasks (
@@ -171,23 +163,64 @@ jobs:
                 due_date DATE NULL,
                 completed BOOLEAN DEFAULT FALSE
               );
-END_SQL
-)
-
-            # Provide the password via an environment variable
-            export MYSQL_PWD='${{ secrets.DB_PASSWORD }}'
-
-            # Pipe the SQL script variable into the mysql client
-            echo "$SQL_SCRIPT" | mysql -h "$RDS_HOSTNAME" -P 3306 -u ${{ secrets.DB_USERNAME }}
-
-            # Unset the variable for security
-            unset MYSQL_PWD
+            MYSQL
           EOF
 
       - name: Deploy Application to ${{ matrix.web_server_ip }}
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
-            # (The user_data.sh script should handle this, but this is a failsafe)
-            echo "Deployment to web server ${{ matrix.web_server_ip }} starting..."
-            # Add application deployment logic here if not handled by user_data
+            # Install dependencies
+            sudo yum update -y
+            sudo yum install -y git
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+            sudo yum install -y nodejs
+            
+            # Clone repo and set up application
+            git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
+            cd ${{ env.REPO_NAME }}
+            PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+
+            # Create .env file correctly
+            echo "DB_HOST=${{ needs.terraform-apply.outputs.rds_endpoint }}" > .env
+            echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+            echo "DB_NAME=SmartTodoWebAppDB" >> .env
+            echo "PORT=3306" >> .env
+            echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
+
+            # Install app dependencies and run with pm2
+            npm install
+            sudo npm install -g pm2
+            pm2 start index.js
+            pm2 startup
+            pm2 save
+
+            # Configure and restart nginx
+            sudo yum install -y nginx
+            sudo systemctl start nginx
+            sudo systemctl enable nginx
+            sudo rm /etc/nginx/nginx.conf
+            sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
+            events {
+                worker_connections 1024;
+            }
+            http {
+                server {
+                    listen 80;
+                    server_name _;
+                    location / {
+                        proxy_pass http://localhost:3000;
+                        proxy_http_version 1.1;
+                        proxy_set_header Upgrade \$http_upgrade;
+                        proxy_set_header Connection "upgrade";
+                        proxy_set_header Host \$host;
+                        proxy_cache_bypass \$http_upgrade;
+                    }
+                    location /static/ {
+                        root /home/ec2-user/${{ env.REPO_NAME }}/public;
+                    }
+                }
+            }
+            EOT'
+            sudo systemctl restart nginx
           EOF
