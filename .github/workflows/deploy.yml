@@ -151,13 +151,9 @@ jobs:
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             set -e
             sudo dnf update -y
-
-            # Install MySQL client for Amazon Linux 2023 (with GPG check disabled)
             sudo dnf install -y https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm --nogpgcheck
             sudo dnf install -y mysql --nogpgcheck
-
             RDS_HOST=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
-
             mysql -h "$RDS_HOST" -P 3306 -u "${{ secrets.DB_USERNAME }}" -p"${{ secrets.DB_PASSWORD }}" -e "
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
@@ -175,12 +171,17 @@ jobs:
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
             set -e
+            echo ">>> Updating"
             sudo dnf update -y
+            echo ">>> Installing Git and Nginx"
             sudo dnf install -y git nginx
-            curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
+            echo ">>> Installing Node.js 18"
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
             sudo dnf install -y nodejs
+            echo ">>> Cloning repo"
             git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
             cd ${{ env.REPO_NAME }}
+            echo ">>> Configuring .env"
             RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
             PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             echo "DB_HOST=$RDS_HOSTNAME" > .env
@@ -189,11 +190,15 @@ jobs:
             echo "DB_NAME=SmartTodoWebAppDB" >> .env
             echo "PORT=3306" >> .env
             echo "API_BASE_URL=http://$PUBLIC_IP" >> .env
+            echo ">>> Installing app dependencies"
             npm install
+            echo ">>> Installing PM2"
             sudo npm install -g pm2
+            echo ">>> Starting app"
             pm2 start index.js
             pm2 save
             env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user
+            echo ">>> Configuring NGINX"
             sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
             events { worker_connections 1024; }
             http {
@@ -213,4 +218,6 @@ jobs:
             EOT'
             sudo systemctl restart nginx
             sudo systemctl enable nginx
+            echo ">>> Deployment completed."
+            sleep 10
           EOF
