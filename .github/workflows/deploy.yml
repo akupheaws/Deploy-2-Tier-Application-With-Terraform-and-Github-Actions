@@ -15,11 +15,9 @@ jobs:
   terraform-validate-plan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -53,8 +51,7 @@ jobs:
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
 
-      - name: Upload Plan
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
           path: terraform/tfplan
@@ -70,16 +67,13 @@ jobs:
       web_server_2_public_ip: ${{ steps.tf-outputs.outputs.web_server_2_public_ip }}
       cloudfront_domain: ${{ steps.tf-outputs.outputs.cloudfront_domain }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Download Plan
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: terraform-plan
           path: terraform
@@ -110,15 +104,15 @@ jobs:
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_key_pair_name: ${{ secrets.KEY_PAIR_NAME }}
 
-      - name: Get Terraform Outputs
+      - name: Get Outputs Safely
         id: tf-outputs
         working-directory: terraform
         run: |
-          echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
-          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
-          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip)" >> $GITHUB_OUTPUT
-          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip)" >> $GITHUB_OUTPUT
-          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain)" >> $GITHUB_OUTPUT
+          echo "rds_endpoint=$(terraform output -raw rds_endpoint || echo '')" >> $GITHUB_OUTPUT
+          echo "bastion_public_ip=$(terraform output -raw bastion_public_ip || echo '')" >> $GITHUB_OUTPUT
+          echo "web_server_1_public_ip=$(terraform output -raw web_server_1_public_ip || echo '')" >> $GITHUB_OUTPUT
+          echo "web_server_2_public_ip=$(terraform output -raw web_server_2_public_ip || echo '')" >> $GITHUB_OUTPUT
+          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain || echo '')" >> $GITHUB_OUTPUT
 
   deploy-application:
     needs: terraform-apply
@@ -130,18 +124,28 @@ jobs:
           - ${{ needs.terraform-apply.outputs.web_server_1_public_ip }}
           - ${{ needs.terraform-apply.outputs.web_server_2_public_ip }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Check for Missing Web Server IP
+        if: matrix.web_server_ip == ''
+        run: |
+          echo "::error::Missing web server IP. Terraform may have failed."
+          exit 1
 
-      - name: Set Up SSH Key
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH Key
         run: |
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > bastion-host-key.pem
           chmod 600 bastion-host-key.pem
 
-      - name: Initialize Database Schema
+      - name: Configure RDS Schema (First Web Server Only)
         if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip
         run: |
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << EOF
+          if [ -z "${{ needs.terraform-apply.outputs.bastion_public_ip }}" ]; then
+            echo "::error::Missing Bastion IP. Skipping DB setup."
+            exit 1
+          fi
+
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             sudo dnf update -y
             sudo dnf install -y mariadb
             mysql -h $(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1) \
@@ -157,10 +161,14 @@ jobs:
               );"
           EOF
 
-      - name: Deploy Node.js App to Web Server
+      - name: Deploy Node.js App
         run: |
-          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << EOF
-            set -e
+          if [ -z "${{ matrix.web_server_ip }}" ]; then
+            echo "::error::Web server IP is empty. Aborting deployment."
+            exit 1
+          fi
+
+          ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
             sudo dnf update -y
             sudo dnf install -y git nginx
             curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
