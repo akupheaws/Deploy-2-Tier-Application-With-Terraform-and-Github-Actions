@@ -210,23 +210,23 @@ jobs:
             sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user || true
 
             echo ">>> Configuring NGINX"
-            sudo bash -c 'cat <<EOT > /etc/nginx/nginx.conf
-            events { worker_connections 1024; }
-            http {
-              server {
-                listen 80;
-                server_name _;
-                location / {
-                  proxy_pass http://localhost:3000;
-                  proxy_http_version 1.1;
-                  proxy_set_header Upgrade \$http_upgrade;
-                  proxy_set_header Connection "upgrade";
-                  proxy_set_header Host \$host;
-                  proxy_cache_bypass \$http_upgrade;
-                }
-              }
-            }
-            EOT'
+            sudo bash -c "cat > /etc/nginx/nginx.conf" <<'EOT'
+events { worker_connections 1024; }
+http {
+  server {
+    listen 80;
+    server_name _;
+    location / {
+      proxy_pass http://localhost:3000;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_cache_bypass $http_upgrade;
+    }
+  }
+}
+EOT
 
             sudo systemctl restart nginx
             sudo systemctl enable nginx
