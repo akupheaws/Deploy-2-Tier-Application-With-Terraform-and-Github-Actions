@@ -148,11 +148,10 @@ jobs:
         if: matrix.web_server_ip == needs.terraform-apply.outputs.web_server_1_public_ip # Run this step only once
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
-            sudo wget https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm
-            # THE FIX IS HERE: Use yum instead of dnf
-            sudo yum install mysql80-community-release-el9-1.noarch.rpm -y
+            # THE FIX IS HERE: Use the el7 package compatible with Amazon Linux 2
+            sudo wget https://dev.mysql.com/get/mysql80-community-release-el7-3.noarch.rpm
+            sudo yum localinstall mysql80-community-release-el7-3.noarch.rpm -y
             sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
-            # AND HERE: Use yum instead of dnf
             sudo yum install mysql-community-client -y
             mysql -h ${{ needs.terraform-apply.outputs.rds_endpoint }} -P 3306 -u ${{ secrets.DB_USERNAME }} -p'${{ secrets.DB_PASSWORD }}' << 'MYSQL'
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
