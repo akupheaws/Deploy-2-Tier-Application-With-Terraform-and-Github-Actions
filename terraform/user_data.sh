@@ -8,9 +8,8 @@ sudo dnf update -y
 # Install Apache web server (httpd), PHP, and the MySQL driver for PHP
 sudo dnf install -y httpd php php-mysqlnd
 
-# CORRECTED: Install the MySQL command-line client from AL2023's default repository
-# This replaces the old, incompatible method of using the mysql80-community-release RPM
-sudo dnf install -y mysql
+# CORRECTED: Install the MariaDB package, which provides the mysql command on AL2023
+sudo dnf install -y mariadb
 
 # Start the Apache web server
 sudo systemctl start httpd
