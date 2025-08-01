@@ -149,18 +149,12 @@ jobs:
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             set -e # Exit if any command fails
-
-            # Install mysql client
             sudo yum install -y wget
             sudo wget https://dev.mysql.com/get/mysql80-community-release-el7-3.noarch.rpm
             sudo yum localinstall mysql80-community-release-el7-3.noarch.rpm -y
             sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
             sudo yum install -y mysql-community-client
-
-            # FIX: Parse the hostname from the full endpoint (hostname:port)
             RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
-
-            # Use the corrected hostname and provide SQL via -e flag
             mysql -h "$RDS_HOSTNAME" -P 3306 -u "${{ secrets.DB_USERNAME }}" -p"${{ secrets.DB_PASSWORD }}" -e "
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
               USE SmartTodoWebAppDB;
@@ -178,20 +172,22 @@ jobs:
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
             set -e # Exit if any command fails
-
             sudo yum update -y
-            sudo yum install -y git nginx
-            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+            sudo yum install -y git
+            
+            # FIX 1: Switch to a compatible Node.js version (16.x) for Amazon Linux 2
+            curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
             sudo yum install -y nodejs
+
+            # FIX 2: Install nginx using the correct amazon-linux-extras command
+            sudo amazon-linux-extras install nginx1 -y
 
             git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
             cd ${{ env.REPO_NAME }}
 
-            # FIX: Parse the hostname for the .env file
             RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
             PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
 
-            # Create the .env file with the corrected hostname
             echo "DB_HOST=$RDS_HOSTNAME" > .env
             echo "DB_USER=${{ secrets.DB_USERNAME }}" >> .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
@@ -203,11 +199,8 @@ jobs:
             sudo npm install -g pm2
             pm2 start index.js
             pm2 save
-            
-            # FIX: Use the full command to correctly configure PM2 to start on boot
             env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user
-
-            # Configure and start Nginx
+            
             sudo systemctl start nginx
             sudo systemctl enable nginx
             sudo rm -f /etc/nginx/nginx.conf
