@@ -149,11 +149,10 @@ jobs:
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             set -e # Exit if any command fails
-            sudo yum install -y wget
-            sudo wget https://dev.mysql.com/get/mysql80-community-release-el7-3.noarch.rpm
-            sudo yum localinstall mysql80-community-release-el7-3.noarch.rpm -y
-            sudo rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023
-            sudo yum install -y mysql-community-client
+
+            # UPDATED FOR AL2023: Install MariaDB which provides the mysql client
+            sudo dnf install -y mariadb
+
             RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
             mysql -h "$RDS_HOSTNAME" -P 3306 -u "${{ secrets.DB_USERNAME }}" -p"${{ secrets.DB_PASSWORD }}" -e "
               CREATE DATABASE IF NOT EXISTS SmartTodoWebAppDB;
@@ -172,18 +171,17 @@ jobs:
         run: |
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
             set -e # Exit if any command fails
-            sudo yum update -y
-            sudo yum install -y git
-            
-            # FIX 1: Remove any old NodeSource repo configurations to prevent conflicts
-            sudo rm -f /etc/yum.repos.d/nodesource.repo
 
-            # Use the compatible Node.js 16 version
+            # UPDATED FOR AL2023: Use dnf instead of yum
+            sudo dnf update -y
+            sudo dnf install -y git
+
+            # The NodeSource script is compatible with AL2023 and will use dnf
             curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
-            sudo yum install -y nodejs
+            sudo dnf install -y nodejs
 
-            # FIX 2: Install nginx using the correct amazon-linux-extras command
-            sudo amazon-linux-extras install nginx1 -y
+            # UPDATED FOR AL2023: Install nginx from the default repository
+            sudo dnf install -y nginx
 
             git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
             cd ${{ env.REPO_NAME }}
@@ -203,7 +201,7 @@ jobs:
             pm2 start index.js
             pm2 save
             env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user
-            
+
             sudo systemctl start nginx
             sudo systemctl enable nginx
             sudo rm -f /etc/nginx/nginx.conf
