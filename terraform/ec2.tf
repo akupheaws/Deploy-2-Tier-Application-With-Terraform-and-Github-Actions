@@ -1,50 +1,57 @@
-# Fetches the latest Amazon Linux 2023 AMI ID from AWS Systems Manager Parameter Store
-data "aws_ssm_parameter" "amazon_linux_2023" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+}
+
+resource "aws_instance" "bastion" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t2.micro"
+  subnet_id              = aws_subnet.public_a.id
+  key_name               = var.key_pair_name
+  vpc_security_group_ids = [aws_security_group.webserver_sg.id]
+  associate_public_ip_address = true
+
+  tags = {
+    Name = "SmartTodoWebApp-Bastion"
+  }
 }
 
 resource "aws_instance" "web_server_1" {
-  ami                    = data.aws_ssm_parameter.amazon_linux_2023.value
+  ami                    = data.aws_ami.amazon_linux.id
   instance_type          = "t2.micro"
   subnet_id              = aws_subnet.public_a.id
-  vpc_security_group_ids = [aws_security_group.webserver_sg.id]
   key_name               = var.key_pair_name
-  user_data              = templatefile("user_data.sh", {
-    rds_endpoint = aws_db_instance.rds.endpoint,
-    db_username  = var.db_username,
-    db_password  = var.db_password,
-    public_ip    = "web_server_1.public_ip"
-  })
+  vpc_security_group_ids = [aws_security_group.webserver_sg.id]
+  associate_public_ip_address = true
+
+  user_data = file("${path.module}/user_data.sh")
+
   tags = {
-    Name = "web-server-1"
+    Name = "SmartTodoWebApp-WebServer-1"
   }
 }
 
 resource "aws_instance" "web_server_2" {
-  ami                    = data.aws_ssm_parameter.amazon_linux_2023.value
+  ami                    = data.aws_ami.amazon_linux.id
   instance_type          = "t2.micro"
   subnet_id              = aws_subnet.public_b.id
-  vpc_security_group_ids = [aws_security_group.webserver_sg.id]
   key_name               = var.key_pair_name
-  user_data              = templatefile("user_data.sh", {
-    rds_endpoint = aws_db_instance.rds.endpoint,
-    db_username  = var.db_username,
-    db_password  = var.db_password,
-    public_ip    = "web_server_2.public_ip"
-  })
-  tags = {
-    Name = "web-server-2"
-  }
-}
+  vpc_security_group_ids = [aws_security_group.webserver_sg.id]
+  associate_public_ip_address = true
 
-resource "aws_instance" "bastion_host" {
-  ami                    = data.aws_ssm_parameter.amazon_linux_2023.value
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.public_a.id
-  vpc_security_group_ids = [aws_security_group.webserver_sg.id]
-  key_name               = var.key_pair_name
+  user_data = file("${path.module}/user_data.sh")
+
   tags = {
-    Name = "bastion-host"
+    Name = "SmartTodoWebApp-WebServer-2"
   }
 }
-//

@@ -15,5 +15,5 @@ output "web_server_2_public_ip" {
 }
 
 output "cloudfront_domain" {
-  value = aws_cloudfront_distribution.this.domain_name
+  value = aws_cloudfront_distribution.cdn.domain_name
 }
