@@ -5,10 +5,14 @@ set -x
 # Exit on any error to prevent partial setup
 set -e
 
+# Remove any incompatible MySQL repositories to prevent dependency issues
+sudo rpm -e --nodeps mysql80-community-release-el7 || true
+sudo rm -f /etc/yum.repos.d/mysql-community*
+
 # Update all packages
 sudo dnf update -y
 
-# Install Apache, PHP, PHP MySQL driver, and MariaDB client
+# Install Apache, PHP, PHP MySQL driver, and MariaDB client (provides mysql command)
 sudo dnf install -y httpd php php-mysqlnd mariadb
 
 # Allow HTTP traffic through the firewall
@@ -36,7 +40,7 @@ EOF
 sudo chown apache:apache /etc/php.d/config.php
 sudo chmod 600 /etc/php.d/config.php
 
-# Set ownership for web root
+# Set ownership and permissions for web root
 sudo chown -R apache:apache /var/www/html
 sudo chmod -R 755 /var/www/html
 
