@@ -37,6 +37,7 @@ resource "aws_lb_target_group_attachment" "web_server_2" {
   port             = 80
 }
 
+# This listener is corrected to fix the warning.
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.alb.arn
   port              = 80
@@ -51,6 +52,7 @@ resource "aws_lb_listener" "http" {
   }
 }
 
+# This listener is corrected with a lifecycle block to resolve dependency errors in CI/CD.
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.alb.arn
   port              = 443
@@ -59,5 +61,12 @@ resource "aws_lb_listener" "https" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.tg.arn
+  }
+
+  lifecycle {
+    replace_triggered_by = [
+      # If the certificate ARN changes, replace the listener instead of trying to update it in-place.
+      aws_acm_certificate_validation.cert_cloudfront.certificate_arn
+    ]
   }
 }
