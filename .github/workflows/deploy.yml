@@ -150,7 +150,8 @@ jobs:
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ needs.terraform-apply.outputs.bastion_public_ip }} << 'EOF'
             set -e # Exit if any command fails
 
-            # UPDATED FOR AL2023: Install MariaDB which provides the mysql client
+            # UPDATED: Force package list update before installing
+            sudo dnf update -y
             sudo dnf install -y mariadb
 
             RDS_HOSTNAME=$(echo "${{ needs.terraform-apply.outputs.rds_endpoint }}" | cut -d: -f1)
@@ -172,15 +173,12 @@ jobs:
           ssh -i bastion-host-key.pem -o StrictHostKeyChecking=no ec2-user@${{ matrix.web_server_ip }} << 'EOF'
             set -e # Exit if any command fails
 
-            # UPDATED FOR AL2023: Use dnf instead of yum
+            # UPDATED FOR AL2023: Use dnf and install from default repos
             sudo dnf update -y
             sudo dnf install -y git
-
-            # The NodeSource script is compatible with AL2023 and will use dnf
+            
             curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
             sudo dnf install -y nodejs
-
-            # UPDATED FOR AL2023: Install nginx from the default repository
             sudo dnf install -y nginx
 
             git clone https://github.com/akupheaws/${{ env.REPO_NAME }}.git
@@ -201,7 +199,7 @@ jobs:
             pm2 start index.js
             pm2 save
             env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user
-
+            
             sudo systemctl start nginx
             sudo systemctl enable nginx
             sudo rm -f /etc/nginx/nginx.conf
