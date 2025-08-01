@@ -175,7 +175,10 @@ jobs:
             sudo yum update -y
             sudo yum install -y git
             
-            # FIX 1: Switch to a compatible Node.js version (16.x) for Amazon Linux 2
+            # FIX 1: Remove any old NodeSource repo configurations to prevent conflicts
+            sudo rm -f /etc/yum.repos.d/nodesource.repo
+
+            # Use the compatible Node.js 16 version
             curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
             sudo yum install -y nodejs
 
@@ -228,4 +231,3 @@ jobs:
             EOT'
             sudo systemctl restart nginx
           EOF
-          
